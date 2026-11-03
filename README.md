@@ -1,39 +1,63 @@
-# lyf 的第三次求助
+# HerKules 视觉组大作业：装甲板检测与位姿估计
 
 [中文](README.md) · [English](README.en.md)
 
-## 云台能动了，然后呢？
+已实现**路线 A：检测**。使用官方 ONNX 模型和相机标定，在 CPU 上检测视频中的装甲板，
+恢复四角点的相机坐标，并为每帧导出一条 JSONL。作业只需选择一条路线，`aiming/` 保留模板原样。
 
-在[控制组的作业](https://github.com/HKUAstar/control-training-template)中，
-lyf 把 yaw、pitch 云台教具交给了控制组。这次我们假设他们已经完成程序：
-云台可以回正、跟随目标角度，也能在调试时停止输出。
+- [完整运行说明、算法和参数](detection/README.md)
+- [原始检测题目](detection/ASSIGNMENT.md)
+- [实现](detection/detect.py) · [测试](detection/tests/test_detection.py) · [输出校验器](detection/validate.py)
+- [small.jsonl](detection/results/small.jsonl) · [large.jsonl](detection/results/large.jsonl) · [验证报告](detection/results/validation.json)
 
-看到云台终于不再反复点头，lyf 松了一口气：“现在能不能让它自己盯着目标转？”
+## 快速复现
 
-控制组也想试试。他们留出了目标角度接口，准备接上视觉系统。
-但视觉组还得回答两个问题：相机画面里的哪一块是装甲板？
-就算知道它现在在哪里，等弹丸飞过去，它又会转到哪里？
+在仓库根目录运行，推荐 Python 3.12（本次验证版本为 3.12.3）：
 
-这一次，你负责实现视觉链路中的一段。为了让你能在自己的电脑上独立完成，
-我们提供录像、模型、标定和瞄准仿真器。本次不需要真实教具、相机、电机或控制板，
-也不要求与控制组固件通信。故事中的联调只是背景，不是额外的硬件任务。
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r detection/requirements.txt
 
-## 两条路线，任选其一
+for clip in small large; do
+  .venv/bin/python detection/detect.py \
+    --model detection/assets/0526.onnx \
+    --video "detection/assets/$clip.mp4" \
+    --calibration detection/assets/calibration.yaml \
+    --output "detection/results/$clip.jsonl" \
+    --annotated-video "detection/results/${clip}_annotated.mp4" \
+    --preview-dir "detection/results/${clip}_previews"
+done
 
-**只需完成检测或瞄准中的一项，不要求两项都做。两条路线互不依赖。**
+.venv/bin/python -m unittest discover -s detection/tests -v
+.venv/bin/python detection/validate.py \
+  detection/results/small.jsonl detection/results/large.jsonl \
+  --calibration detection/assets/calibration.yaml
+```
 
-| 路线 | 你负责什么 | 已提供什么 | 从哪里开始 |
-| --- | --- | --- | --- |
-| 检测 | 从视频检测装甲板，用 PnP 恢复三维角点，导出 JSONL | 预训练模型、比赛片段、相机标定 | [detection/README.md](detection/README.md) |
-| 瞄准 | 根据延迟送达的目标状态预测装甲板位置，决定瞄准角和开火时机 | 精确的历史观测、弹道工具、3D 仿真、MCAP 回放 | [aiming/README.md](aiming/README.md) |
+输入模型、两个视频和标定文件已随模板保存在 `detection/assets/`，不需要训练、GPU 或 ROS。
+程序使用 `CPUExecutionProvider`；即使 ONNX Runtime 在启动时提示无法发现 GPU，也不影响 CPU 推理。
+MP4 由 OpenCV 编码，不需要单独安装 ffmpeg。标注视频默认不纳入 Git，可用上述命令重新生成。
 
-检测路线语言不限，推荐 Python、C++ 或 Rust，不需要训练模型。
-瞄准路线使用 Rust，不需要实现检测器、跟踪器或状态估计。
-两者都允许使用参考资料和 AI 工具，但你需要能够解释自己的实现并定位问题。
+## 验证结果
 
-## 开始与提交
+默认参数：objectness 阈值 0.5、NMS IoU 0.5、最大重投影 RMS 5 像素。
 
-1. 打开[作业模板](https://github.com/HKUAstar/vision-training-assignment)，点击
-   **Use this template → Create a new repository**，在自己的账号下创建作业仓库。
-2. Clone 自己的仓库，选择检测或瞄准路线，按对应 README 完成作业。
-3. 将完成的代码 commit 并 push 到自己的仓库，然后提交该仓库的 **GitHub URL**。
+| 输入视频 | 输出帧数 | 检测数 | 有效位姿 | 位姿为 null | 重投影 RMS 中位数 / P95 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| small.mp4 | 360 | 396 | 396 | 0 | 0.119 / 0.302 px |
+| large.mp4 | 360 | 151 | 148 | 3 | 0.275 / 1.822 px |
+
+13 项单元测试全部通过；两份 JSONL 的 720 帧全部通过独立检查，包含帧序、时间戳、类别、
+有限数值、正深度、物理尺寸、矩形几何和重投影误差。没有检测的帧也保留记录。
+这验证了实现与输出的一致性；数据不提供逐帧真值，不能据此声称检测准确率或真实三维精度。
+
+![小装甲板检测示例](detection/results/small_previews/frame_0000.png)
+
+## 来源与提交
+
+- [任务页面](https://training.herkules.dev/learn/vision-assignment)
+- [官方模板](https://github.com/HKUAstar/vision-training-assignment)，基于提交 `c9fa5e9`。
+- [模型及参考实现](https://github.com/broalantaps/RobotDetectionModel)，具体说明见检测目录。
+
+作业使用了 AI 辅助实现与验证，算法流程、参数和失败处理均在文档中说明。
+正式提交时，按任务页面要求将本仓库发布到自己的 **Public GitHub 仓库**，再在培训网站填写该仓库 URL。

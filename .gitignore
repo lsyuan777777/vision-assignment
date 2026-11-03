@@ -4,3 +4,10 @@ target
 .env
 .env.*
 !.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.codex/
+detection/results/*.mp4
+dist/

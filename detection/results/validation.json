@@ -1,0 +1,65 @@
+[
+  {
+    "file": "detection/results/small.jsonl",
+    "frames": 360,
+    "fps": 30.0,
+    "detections": 396,
+    "frames_with_detections": 198,
+    "empty_frames": 162,
+    "valid_poses": 396,
+    "failed_poses": 0,
+    "colors": {
+      "blue": 54,
+      "red": 342
+    },
+    "patterns": {
+      "1": 1,
+      "2": 8,
+      "3": 265,
+      "4": 78,
+      "5": 4,
+      "outpost": 2,
+      "sentry": 38
+    },
+    "reprojection_error_px": {
+      "median": 0.118884848576328,
+      "p95": 0.30203276927301187,
+      "max": 0.5392863977231099
+    },
+    "depth_range_m": [
+      2.268723114687187,
+      12.444615202673718
+    ]
+  },
+  {
+    "file": "detection/results/large.jsonl",
+    "frames": 360,
+    "fps": 30.0,
+    "detections": 151,
+    "frames_with_detections": 101,
+    "empty_frames": 259,
+    "valid_poses": 148,
+    "failed_poses": 3,
+    "colors": {
+      "blue": 150,
+      "neutral": 1
+    },
+    "patterns": {
+      "1": 60,
+      "2": 56,
+      "3": 1,
+      "base_small": 1,
+      "outpost": 1,
+      "sentry": 32
+    },
+    "reprojection_error_px": {
+      "median": 0.27462279831960695,
+      "p95": 1.8219268958434471,
+      "max": 3.503210624358305
+    },
+    "depth_range_m": [
+      0.5754209985584942,
+      5.307395556877469
+    ]
+  }
+]

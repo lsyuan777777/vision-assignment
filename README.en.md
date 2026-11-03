@@ -1,46 +1,52 @@
-# lyf asks for help again
+# HerKules vision assignment: detection and pose estimation
 
 [中文](README.md) · [English](README.en.md)
 
-## The gimbal moves. What comes next?
+This solution implements **route A (detection)** with Python, CPU ONNX Runtime and OpenCV.
+The untouched `aiming/` directory belongs to the alternative route, which is not required.
 
-In the [control assignment](https://github.com/HKUAstar/control-training-template),
-lyf handed the yaw/pitch gimbal teaching rig to the control group. For this scenario,
-assume they have finished the firmware: the rig can home, follow target angles,
-and stop its output during debugging.
+## Run from the repository root
 
-Watching the gimbal finally hold still, lyf asks: “Can we make it turn toward a target
-by itself now?”
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r detection/requirements.txt
+for clip in small large; do
+  .venv/bin/python detection/detect.py \
+    --model detection/assets/0526.onnx \
+    --video "detection/assets/$clip.mp4" \
+    --calibration detection/assets/calibration.yaml \
+    --output "detection/results/$clip.jsonl" \
+    --annotated-video "detection/results/${clip}_annotated.mp4" \
+    --preview-dir "detection/results/${clip}_previews"
+done
+.venv/bin/python -m unittest discover -s detection/tests -v
+.venv/bin/python detection/validate.py \
+  detection/results/small.jsonl detection/results/large.jsonl \
+  --calibration detection/assets/calibration.yaml
+```
 
-The control group wants to try that too. They have an interface for target angles and
-want to connect a vision stack. The vision group still needs to answer two questions:
-which part of the camera image is an armor plate, and where will that plate be by the
-time a projectile reaches it?
+Tested with Python 3.12.3. Model, videos and calibration are included in `detection/assets/`.
+No training, GPU, ROS, or standalone ffmpeg installation is needed.
 
-Your job is to build one part of that vision pipeline. We provide recordings, a model,
-calibration, and an aiming simulator so you can work on your own computer. You do not
-need the physical rig, camera, motors, or control board. Communication with the control
-firmware is outside this assignment; the integration story supplies the context.
+## Method and results
 
-## Choose one path
+Centered 114 letterboxing, RGB normalization, float16 NCHW input, objectness sigmoid,
+all-color decoding and class-agnostic AABB NMS are implemented explicitly.
+Original corner correspondence is preserved. Pattern IDs select small/large physical geometry.
+IPPE and LM refinement yield candidate poses; the best finite positive-depth fit is selected.
+Fits exceeding 5 px Euclidean RMS retain their detections with null pose fields.
 
-**Complete either detection or aiming. You are not required to do both, and neither
-path depends on completing the other.**
+| Video | Frames | Detections | Valid poses | Null poses | Median / P95 RMS |
+| --- | ---: | ---: | ---: | ---: | --- |
+| small.mp4 | 360 | 396 | 396 | 0 | 0.119 / 0.302 px |
+| large.mp4 | 360 | 151 | 148 | 3 | 0.275 / 1.822 px |
 
-| Path | Your work | Provided | Start here |
-| --- | --- | --- | --- |
-| Detection | Detect armor in video, recover 3D corners with PnP, export JSONL | Pretrained model, competition clips, camera calibration | [detection/README.en.md](detection/README.en.md) |
-| Aiming | Predict armor motion from delayed target states, choose aim angles and when to fire | Perfect historical observations, trajectory helper, 3D simulator, MCAP replay | [aiming/README.en.md](aiming/README.en.md) |
+All 13 unit tests pass. The independent validator checks all 720 output records, timestamps,
+finite values, class names, positive depth, physical dimensions and reprojection RMS.
+No detection or 3D ground truth is supplied, so these are consistency checks, not accuracy claims.
 
-Detection accepts any language; Python, C++, and Rust are recommended. No model training
-is needed. Aiming uses Rust and requires no detector, tracker, or state estimator.
-References and AI tools are allowed for either path, but you should be able to explain
-your implementation and debug its behavior.
-
-## Start and submit
-
-1. Open the [assignment template](https://github.com/HKUAstar/vision-training-assignment),
-   select **Use this template → Create a new repository**, and create a repository
-   under your account.
-2. Clone your repository, choose detection or aiming, and follow that path's README.
-3. Commit and push your completed code to your repository, then submit its **GitHub URL**.
+See [the detailed implementation guide](detection/README.md),
+[original assignment](detection/ASSIGNMENT.md), and [validation report](detection/results/validation.json).
+The code was developed with AI assistance. The official template is
+[HKUAstar/vision-training-assignment](https://github.com/HKUAstar/vision-training-assignment) at `c9fa5e9`.
+To submit, publish your solution to your own public GitHub repository and submit its URL on the training website.
