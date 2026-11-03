@@ -1,0 +1,104 @@
+[
+  {
+    "aim_ticks": 1995,
+    "config": {
+      "duration_s": 20.0,
+      "size": {
+        "mount_pitch_rad": 0.2617993877991494,
+        "plate_center_z_m": 0.3,
+        "plate_height_m": 0.056,
+        "plate_width_m": 0.135,
+        "radius_m": 0.25
+      },
+      "target": {
+        "omega_rad_s": 0.0,
+        "theta_rad": 0.0,
+        "vx_m_s": 0.0,
+        "vy_m_s": 0.0,
+        "x_m": 5.0,
+        "y_m": 0.0
+      }
+    },
+    "final_time_s": 22.02,
+    "fire_requests": 1995,
+    "hit_rate": 1.0,
+    "max_endpoint_residual_m": 5.551115123125783e-17,
+    "scenario": "scenarios/stationary.json",
+    "settled_shots": 80,
+    "stats": {
+      "hits": 80,
+      "invalid_commands": 0,
+      "misses": 0,
+      "shots": 80
+    },
+    "ticks": 2203
+  },
+  {
+    "aim_ticks": 1995,
+    "config": {
+      "duration_s": 20.0,
+      "size": {
+        "mount_pitch_rad": 0.2617993877991494,
+        "plate_center_z_m": 0.3,
+        "plate_height_m": 0.056,
+        "plate_width_m": 0.135,
+        "radius_m": 0.25
+      },
+      "target": {
+        "omega_rad_s": 4.0,
+        "theta_rad": 0.0,
+        "vx_m_s": 0.0,
+        "vy_m_s": 0.0,
+        "x_m": 5.0,
+        "y_m": 0.0
+      }
+    },
+    "final_time_s": 22.02,
+    "fire_requests": 1995,
+    "hit_rate": 1.0,
+    "max_endpoint_residual_m": 9.997582305990639e-8,
+    "scenario": "scenarios/spinning.json",
+    "settled_shots": 80,
+    "stats": {
+      "hits": 80,
+      "invalid_commands": 0,
+      "misses": 0,
+      "shots": 80
+    },
+    "ticks": 2203
+  },
+  {
+    "aim_ticks": 1995,
+    "config": {
+      "duration_s": 20.0,
+      "size": {
+        "mount_pitch_rad": 0.2617993877991494,
+        "plate_center_z_m": 0.3,
+        "plate_height_m": 0.056,
+        "plate_width_m": 0.135,
+        "radius_m": 0.25
+      },
+      "target": {
+        "omega_rad_s": 2.0,
+        "theta_rad": 0.0,
+        "vx_m_s": 0.1,
+        "vy_m_s": 0.15,
+        "x_m": 5.0,
+        "y_m": -1.5
+      }
+    },
+    "final_time_s": 22.02,
+    "fire_requests": 1995,
+    "hit_rate": 1.0,
+    "max_endpoint_residual_m": 3.3379698594962614e-8,
+    "scenario": "scenarios/moving.json",
+    "settled_shots": 80,
+    "stats": {
+      "hits": 80,
+      "invalid_commands": 0,
+      "misses": 0,
+      "shots": 80
+    },
+    "ticks": 2203
+  }
+]

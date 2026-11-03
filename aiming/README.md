@@ -1,244 +1,139 @@
-# 瞄准作业
+# 路线 B：预测瞄准实现
 
-[中文](README.md) · [English](README.en.md)
+[中文](README.md) · [English](README.en.md) · [原始题目](ASSIGNMENT.md)
 
-这是两条可选路线之一。**检测与瞄准任选其一即可，不要求同时完成。**
-阅读[主 README](../README.md)了解云台教具联调的故事背景。本路线使用仿真器，
-不需要先完成检测路线，也不需要真实云台、相机或电机。
+`src/lib.rs::aim` 已实现延迟补偿、装甲板选择、未来位置迭代、低弹道求解和入射角开火判断。
+控制器只使用 `Input` 提供的历史观测，不访问仿真当前真值。
+官方 `src/sim/`、`src/ui.rs`、物理常量、弹道工具、场景与 Cargo 依赖均保持不变。
 
-## 任务
+## 环境与快速运行
 
-机器人会平移和自旋，你需要瞄准装甲板并决定何时开火。仿真器提供精确的目标模型，
-但观测描述的是过去的状态。你需要预测弹丸到达时装甲板的位置。
+需要 Rust **1.98.1 或更新版本**、C/C++ 编译器和链接器。使用
+[官方 rustup](https://rust-lang.org/tools/install/) 安装工具链：
 
-只需修改 [src/lib.rs](src/lib.rs)，其中包含 `aim` 和相关的类型定义。
-绘图接口位于 [src/ui.rs](src/ui.rs)。`src/sim/` 包含仿真、界面和 MCAP 功能，请勿修改。
-模板默认不开火，并在 `aim` 中提供可以自行修改的装甲板绘图和命中计数示例。
+```bash
+rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+```
 
-## 参考效果
+如果刚安装 Rust，重新打开终端或运行 `source "$HOME/.cargo/env"`。
+以下命令在 `aiming/` 目录运行。本次安装使用 1.98.1；可以用 `cargo +1.98.1 ...` 明确选择版本。
 
-https://github.com/user-attachments/assets/2a08b028-4c0a-400b-9102-b1cc2989b7e8
+```bash
+cargo test --locked --no-default-features
+cargo run --locked --no-default-features --example evaluate
 
-[观看参考视频](assets/tracking-reference.mp4)（4K、60 FPS、22 秒）。
-视频展示了完成作业后的跟踪和射击效果。绿色轮廓表示预计命中时的装甲板姿态，
-橙色曲线表示规划弹道。视频供实现时对照，仓库中不包含完整瞄准解答。
+# 分别录制三个官方场景，不需要桌面环境或 GPU
+for scenario in stationary spinning moving; do
+  cargo run --locked --no-default-features -- \
+    --offline --config "scenarios/$scenario.json" \
+    --record "target/${scenario}.mcap"
+done
+```
 
-## 环境与硬件
+MCAP 文件不能覆盖，重复录制请换新路径。`--offline` 是**无界面仿真**选项，不表示 Cargo 禁止联网。
+首次构建仍需下载锁定的依赖。磁盘紧张时可给 Cargo 命令添加环境变量
+`CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`；本次使用这些设置，不改变代码或评分逻辑。
 
-- 安装 [Rust / rustup](https://www.rust-lang.org/tools/install)，Rust 版本至少为 **1.98.1**。
-- 需要本机 C/C++ 编译器和链接器。macOS 使用 Xcode Command Line Tools；
-  Windows 使用 MSVC C++ Build Tools；Linux 需要编译工具和窗口后端的开发库。
-- 3D 界面需要桌面环境和支持 wgpu 的图形驱动，例如 Metal、Vulkan 或 DX12，不需要独立显卡。
-- 编译约需 **1 GB 内存**，运行约需 **150 MB 内存**，实际用量因环境而异。
-- 只有导出 MP4 才需要 `ffmpeg`。
+## 算法
 
-## 运行
+1. 验证观测、时间和几何尺寸。没有观测、时间倒置、非有限数据或无效尺寸时返回 `None`。
+2. 计算 `age = now - capture`。从观测状态到预计命中的预测间隔始终是
+   `age + LAUNCH_DELAY_S + flight_time`，发射延迟固定为 0.02 秒。
+3. 用预计发射时机器人中心到炮口的距离除以 25 m/s，获得初始飞行时间。
+   在粗估命中时刻计算四块装甲板，用**完整三维外法线**与“板中心指向炮口”的单位向量点积选出正面板。
+4. 固定所选装甲板索引，只对这一块板迭代：预测板位置 → `Trajectory::solve` → 更新飞行时间。
+   更新使用 0.5 松弛系数减轻高速自旋时振荡。最多 48 次，飞行时间变化 ≤ `1e-7` 秒才接受收敛。
+5. 用最终返回的飞行时间重新计算板姿态，要求弹道终点与预测板中心的距离 ≤ `1e-4` 米。
+   不可达、超过官方飞行寿命、未收敛或数值不合法时返回 `None`。
+6. 计算相对入射速度 `v_rel = trajectory.velocity(flight) - plate.velocity_m_s`，包括板的平移和旋转速度。
+   开火评分为 `-normal · v_rel / |v_rel|`。分数 ≥ 0.5 时请求开火，即与正面入射方向夹角不超过 60°。
+   该阈值保留一定入射角余量；分数较低时仍返回瞄准角，但 `fire=false`。
 
-在 `aiming` 目录执行：
+以上是无跨帧可变状态的控制器，每次调用只由输入决定。射速限制交给官方仿真器处理，
+不读取或改写命中计数来改变决策。计数仅用于显示。
 
-```sh
-cargo run --locked
-cargo run --locked -- --config scenarios/stationary.json
-cargo run --locked -- --config scenarios/spinning.json
+特别区分三个时间量：
+
+```text
+观测年龄：       now - capture
+预测间隔：       now - capture + launch_delay + flight_time
+绝对命中时刻：   now + launch_delay + flight_time
+```
+
+世界坐标遵循 +X 前、+Y 左、+Z 上；yaw 从 +X 朝 +Y 为正，pitch 向上为正。
+使用原有低弹道工具，不自行修改重力、弹速、装甲尺寸或碰撞规则。
+
+## 验证结果
+
+完整数据保存在 [results/evaluation.json](results/evaluation.json)，可重新生成：
+
+```bash
+mkdir -p results
+cargo run --locked --no-default-features --example evaluate > results/evaluation.json
+# 也支持评估自己提供的场景
+cargo run --locked --no-default-features --example evaluate -- scenarios/moving.json
+```
+
+| 场景 | 发射数 | 命中 | 未命中 | 无效指令 | 已结算命中率 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| stationary（20 s） | 80 | 80 | 0 | 0 | 100% |
+| spinning（20 s，4 rad/s） | 80 | 80 | 0 | 0 | 100% |
+| moving（20 s，平移 + 2 rad/s 自旋） | 80 | 80 | 0 | 0 | 100% |
+
+所有评估继续运行到场景时长 + 发射延迟 + 最大飞行时间，确保全部弹丸已结算。
+不会用尚未落地的弹丸抬高命中率。官方射速上限为每 0.25 秒一发，三个场景均保持了完整发射机会。
+三个场景中的最大弹道终点残差分别约为 `5.6e-17`、`1.0e-7`、`3.3e-8` 米。
+
+24 项无界面测试全部通过。其中新增的 8 项控制器测试覆盖：
+
+- 三个官方场景的命中表现与足够发射次数。
+- 27 组运动速度、初始相位和 `-16 / 0 / +16 rad/s` 自旋组合，每组 5 秒，均无未命中。
+- 同一目标不同观测年龄产生一致指令，避免写死 50 ms 或重复补偿。
+- 静止目标的 yaw 与重力补偿 pitch。
+- 缺失、未来、非有限观测与无效尺寸；不可达和炮口位于目标中心的情况。
+- 入射角过斜时保持瞄准但不开火。
+- 预测中心与弹道终点一致，绝对命中时间不重复添加观测年龄。
+
+原有物理、碰撞、发射时序和轨迹测试保留。两项原本验证“空白模板不开火/不画标记”的测试，
+已更新为完成后控制器的行为，同时保留 MCAP 精确序列化、绘图和延迟检查。
+移动场景 MCAP 经官方 CLI 读回再写出，与原文件逐字节一致。
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --no-default-features --all-targets -- -D warnings
+```
+
+## 可视化与回放
+
+默认功能包含原生 3D 界面，需要图形驱动和平台窗口开发库；Linux 可使用 Vulkan 驱动。
+无界面数值评估不依赖这些图形组件。
+
+```bash
 cargo run --locked -- --config scenarios/moving.json
+cargo run --locked -- --replay target/moving.mcap --at 3.65
+cargo run --locked -- --replay target/moving.mcap --at 3.65 --preview target/moving.png
+# 可选：安装 ffmpeg 后，用官方导出器生成 4K、60 FPS 视频
+cargo run --locked -- --replay target/moving.mcap --export-video target/moving.mp4
 ```
 
-先做静止目标，再做自旋，最后处理平移与自旋同时发生的情况。
-这个 crate 独立编译，不依赖 OpenCV 或相机 SDK；运行器始终调用你实现的 `aim`。
+青色为观测时刻的四块板，绿色为预计命中时所选板，橙色为弹道与终点。
+界面中的诊断信息包含命中计数、所选索引、观测年龄、飞行时间、绝对命中时刻、入射评分、迭代次数和终点残差。
+回放恢复录制时的指令和绘图，不重新运行控制器。PNG/MP4 导出只包含 3D 场景，不包含文字控件。
 
-## 需要实现的接口
+本地已生成 `results/{stationary,spinning,moving}.mcap`。MCAP 被仓库的 `.gitignore` 排除，可用上述命令重建。
 
-```rust
-pub fn aim(input: &Input, debug: &mut Gizmos) -> Option<Command>
-```
+默认可视化功能已编译，`cargo fmt --all -- --check` 与启用默认功能的
+`cargo clippy --locked --all-targets -- -D warnings` 均通过。移动场景在 3.65 s 的官方 4K 渲染结果如下；
+已完成截图导出验证，未操作桌面交互窗口，也未导出 MP4。
 
-仿真器每 10 ms 调用一次 `aim`。`Input` 包含当前仿真时间、延迟送达的观测、已知几何尺寸，
-以及已经结算的射击计数。每次观测包含采集时间和
-`x_m, y_m, theta_rad, vx_m_s, vy_m_s, omega_rad_s`。
-最初的观测延迟尚未结束时没有观测；接口不会提供目标当前时刻的真值。
+![移动自旋场景：历史装甲板、预测装甲板与弹道](results/moving.png)
 
-返回 `Some(Command { yaw_rad, pitch_rad, fire })`。`fire: false` 表示只瞄准不开火；
-`None` 表示不开火且不提交瞄准指令。被接受的射击指令会锁定角度，在发射延迟后沿固定弹道飞行，
-后续指令不能改变已经发射的弹丸。持续请求开火会受到射速限制。
-命中率按 `hits / (hits + misses)` 计算，尚在飞行的弹丸未结算。
+## 范围与局限
 
-你需要处理缺失观测和不可达弹道，补偿延迟，预测平移和旋转，并选择能够从正面命中的装甲板。
+本结果基于官方精确的延迟观测、匀速平移/自旋模型、固定发射延迟和仅重力弹道。
+尚未评估噪声、加速度、空气阻力、实际云台动态或硬件误差。
+高速/大半径目标可能导致固定点迭代不收敛，或粗选装甲板最终入射过斜；此时会停止发射，
+没有为其他候选板另行穷举弹道。该行为遵循题目“先选板、再固定索引求解”的流程。
 
-## 固定物理参数
-
-所有发射物理量和时序都在 [src/lib.rs](src/lib.rs) 的 `physics` 中定义为常量。
-`Input` 和场景 JSON 不含可配置物理参数。弹道工具、绘图、界面和仿真统一使用这些常量：
-
-| 常量 | 数值 |
-| --- | --- |
-| `MUZZLE_M` | `[0.0, 0.0, 0.3]` m |
-| `MUZZLE_SPEED_M_S` | 25 m/s |
-| `GRAVITY_M_S2` | 9.81 m/s² |
-| `OBSERVATION_DELAY_S` | 0.05 s |
-| `LAUNCH_DELAY_S` | 0.02 s |
-| `FIRE_PERIOD_S` | 0.25 s |
-| `MAX_FLIGHT_S` | 发射后 2 s |
-| `CONTROL_PERIOD_S` | 0.01 s |
-
-调用工具函数时不需要额外传入物理参数。
-
-## 第一步：确定延迟
-
-先检查 `input.observation` 是否存在。观测在采集时刻是精确的，但并不代表当前状态。
-用 `input.now_s - observation.time_s` 求出观测年龄，再考虑从指令被接受到实际发射之间的
-`physics::LAUNCH_DELAY_S`。
-
-目标在这两段延迟和弹丸飞行期间都会运动。把观测年龄、发射延迟和飞行时间分别处理，
-避免漏算或重复相加。缺少观测时不开火；本题不要求跟踪器或状态估计。
-
-## 第二步：选择装甲板
-
-先选装甲板，再解弹道。可以先用距离除以弹速粗估飞行时间，预测在
-“观测年龄 + 发射延迟 + 粗估飞行时间”之后的四块装甲板姿态，
-比较外法线与指向炮口的方向，选择正面朝向炮口的装甲板。当前最近的装甲板到命中时可能已经转到背面。
-
-在第四步的迭代中固定选中的装甲板索引，避免为每个候选都完整求解弹道，
-也避免在迭代中反复更换装甲板。
-初选只是近似，发射前仍需检查最终朝向；所选装甲板不可达时不开火。
-
-装甲板顶部向内倾斜 15°，请使用完整的三维法线。命中必须从正面进入
-0.135 × 0.056 m 的计分矩形。外壳比计分区域更大，击中外壳不算命中。
-`Plate::point` 以装甲板的右、上和外法线方向为坐标轴，把装甲板坐标转换为世界坐标。
-
-## 第三步：求解弹道
-
-世界坐标为 +X 向前、+Y 向左、+Z 向上。yaw 从 +X 向 +Y 为正，pitch 向上为正。
-角度用弧度、距离用米、时间用秒。
-
-设炮口位置为 `m`、弹速为 `v`、yaw 为 `ψ`、pitch 为 `φ`、重力加速度为 `g`。
-弹丸在**发射后**经过 `t` 的位置为：
-
-$$
-\begin{aligned}
-x(t) &= m_x + v\cos\phi\cos\psi\;t,\\
-y(t) &= m_y + v\cos\phi\sin\psi\;t,\\
-z(t) &= m_z + v\sin\phi\;t - \tfrac12 gt^2.
-\end{aligned}
-$$
-
-水平速度不变，竖直速度以 `g` 的速率减小。在射击所在的竖直平面内，以水平距离 `r` 表示：
-
-$$
-z(r) = m_z + r\tan\phi - \frac{g r^2}{2v^2\cos^2\phi}.
-$$
-
-这是一条抛物线，重力为零时退化为直线。仿真没有空气阻力或云台转动耗时，不需要更复杂的弹道模型。
-
-`Trajectory` 包含 `yaw_rad`、`pitch_rad` 和 `flight_time_s`。
-`Trajectory::solve(point_m)` 按已知弹速求解到**固定世界坐标点的低弹道**。
-目标不可达、坐标非有限值或飞行时间超过 `MAX_FLIGHT_S` 时返回 `None`。
-它不预测运动，也不添加延迟。
-
-```rust
-let trajectory = Trajectory::solve(aim_point_m)?;
-debug.trajectory(trajectory, Color::Orange);
-let impact_m = trajectory.position(trajectory.flight_time_s);
-
-Some(Command {
-    yaw_rad: trajectory.yaw_rad,
-    pitch_rad: trajectory.pitch_rad,
-    fire: true, // Decide whether this is a good shot before setting this.
-})
-```
-
-`position(t)` 和 `velocity(t)` 中的时间都从发射开始计。飞行时间不是观测年龄，也不是绝对命中时刻。
-
-## 第四步：瞄准未来位置
-
-弹道工具只解算到固定点，但选中的装甲板仍在运动。用观测年龄、发射延迟和飞行时间预测命中时的姿态。
-未来位置取决于飞行时间，而飞行时间又取决于未来位置，可以用不动点迭代处理：
-
-1. 用距离除以弹速得到初始飞行时间。
-2. 预测“观测年龄 + 发射延迟 + 估计飞行时间”后的目标状态。
-3. 取预测目标上选中装甲板的位置，保持第二步选定的索引。
-4. 求解到该位置的弹道，用新飞行时间更新估计。
-5. 变化足够小时停止，并设置最大迭代次数；失败时不开火。
-
-从观测采集时刻算起的预测间隔是：
-
-$$
-\Delta t = (t_{\mathrm{now}} - t_{\mathrm{capture}})
-           + t_{\mathrm{launch\ delay}} + t_{\mathrm{flight}}.
-$$
-
-绝对命中时刻是 `now + launch_delay + flight_time`，计算它时不要再加观测年龄。
-`Target::at(dt)` 预测匀速平移和自旋，`Target::plates(size)` 返回该时刻的四块装甲板姿态。
-索引随目标一起转动；只预测机器人中心的运动，会漏掉自旋带来的装甲板位移。
-
-用秒作为收敛容差的单位，并限制迭代次数。收敛后弹道终点应接近预测装甲板中心，可以同时画出两者来检查。
-
-还要考虑预计外法线和弹丸相对装甲板的入射速度。
-`trajectory.velocity(trajectory.flight_time_s)` 给出命中时弹丸速度，
-`Plate::velocity_m_s` 同时包含平移和旋转速度。可以参考下面的朝向评分：
-
-$$
-s = -\frac{\mathbf n\cdot(\mathbf v_{\mathrm{projectile}}-
-                         \mathbf v_{\mathrm{plate}})}
-               {\lVert\mathbf v_{\mathrm{projectile}}-\mathbf v_{\mathrm{plate}}\rVert}.
-$$
-
-较大的正值表示更接近正面入射，负值表示从背面接近。排除不可达目标，入射角很偏时可以选择不开火。
-开火阈值决定射击频率和对预测误差的敏感程度。
-
-## 调试
-
-在自己的 `aim` 中调用绘图接口。绘图只持续一个 tick，并与产生它的指令一起存入 MCAP：
-
-```rust
-use aiming_sim::ui::{Color, Gizmos};
-
-debug.plate(plate, input.size, Color::Cyan);
-debug.plate(predicted_plate, input.size, Color::Green);
-debug.trajectory(trajectory, Color::Orange);
-debug.line(from_m, to_m, Color::Purple);
-debug.point("Impact", impact_m, Color::Green);
-debug.overlay("Flight", format!("{:.0} ms", trajectory.flight_time_s * 1000.0));
-```
-
-`debug.trajectory()` 自动采样炮口到命中时刻的抛物线，不需要自己写绘图循环。
-`debug.plate()` 画计分矩形和外法线，不添加标签；需要文字标记时使用 `debug.point()`。
-工具会忽略非有限坐标并限制绘图数量。
-
-左键拖动环绕视角；右键、中键或 Shift+左键拖动平移；滚轮缩放。
-底部工具栏支持播放/暂停、单步、重置、时间轴和显示/隐藏叠加信息。
-Tools 包含场景、绘图图层、速度、相机、初始状态、射击检查和 MCAP 保存/加载。
-Inspect shot 会冻结该次射击的原始指令和绘图，便于逐步检查飞行过程；
-Current tick 返回当前 tick 的诊断信息。
-
-## 录制、回放与导出
-
-```sh
-cargo run --no-default-features --locked -- --offline --record target/run.mcap
-cargo run --locked -- --replay target/run.mcap --at 3.65
-```
-
-录制包含 `/sim/config` 和 `/sim/frame`，保存精确输入、指令、状态、弹丸、计数和绘图。
-回放直接恢复这些内容，不重新运行你的代码。新录制不会覆盖已有文件。
-仿真时间以固定 10 ms 步长推进，不受界面播放速度影响。
-
-PNG 和 MP4 使用同一个 GPU 场景渲染器。MP4 需要 `ffmpeg`。
-导出视角跟随目标，视频为 3840 × 2160、60 FPS，不包含原生界面的文字标签、叠加信息和控件。
-
-```sh
-cargo run --locked -- --replay target/run.mcap --at 3.65 --preview target/preview.png
-cargo run --locked -- --replay target/run.mcap --export-video target/run.mp4
-```
-
-默认目标半径为 0.25 m，装甲板中心高度为 0.3 m。
-碰撞检测以不超过 1 ms 的步长寻找穿过装甲板平面的区间，再用二分法细化。
-相切或同一区间内多次穿越可能被漏掉。
-本题在同一进程内执行学生代码，不是代码沙箱。装甲图案沿用视觉仿真器的素材。
-
-## 可选阅读
-
-- [平动-自旋耦合目标下的火控拦截时间t解析与数值混合寻优策略](https://bbs.herkules.dev/articles/01M0Z7CK2QE1GT8XY1GNQK53YA)：
-  介绍平移、自旋目标的解析与数值拦截时间求解，包括泰勒展开和牛顿迭代。
-- [弹道解算及云台角度求解算法](https://bbs.herkules.dev/articles/01M2N3NVQSC21BAGE585ZF8DY1)：
-  介绍带二次空气阻力的弹道与云台角度求解。
-
-这些是基础作业以外的扩展。仿真使用上面的仅重力抛物线，不需要更复杂的弹道模型。
+实现与测试使用了 AI 辅助。原题与仿真来源为
+[HKUAstar/vision-training-assignment](https://github.com/HKUAstar/vision-training-assignment)。

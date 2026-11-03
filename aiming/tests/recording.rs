@@ -2,7 +2,7 @@ use aiming_sim::{physics, sim::Frame};
 use std::{error::Error, fs, process::Command};
 
 #[test]
-fn cli_records_student_template_drawings() -> Result<(), Box<dyn Error>> {
+fn cli_records_completed_controller_drawings_and_hits() -> Result<(), Box<dyn Error>> {
     let path = std::env::temp_dir().join(format!(
         "aiming-rxui-{}-{}.mcap",
         std::process::id(),
@@ -24,6 +24,7 @@ fn cli_records_student_template_drawings() -> Result<(), Box<dyn Error>> {
     let mut previous = 0;
     let mut hits = 0;
     let mut plate_debug_seen = false;
+    let mut impact_marker_seen = false;
     for message in mcap::MessageStream::new(&bytes)? {
         let message = message?;
         assert!(message.log_time >= previous);
@@ -33,10 +34,11 @@ fn cli_records_student_template_drawings() -> Result<(), Box<dyn Error>> {
             let replay: Frame = serde_json::from_slice(&serde_json::to_vec(&frame)?)?;
             assert_eq!(frame, replay, "replay altered a command or drawing");
             plate_debug_seen |= !frame.gizmos.lines.is_empty();
-            assert!(
-                frame.gizmos.points.is_empty(),
-                "plate labels must be opt-in"
-            );
+            impact_marker_seen |= frame
+                .gizmos
+                .points
+                .iter()
+                .any(|point| point.label == "Impact");
             assert!(
                 frame
                     .gizmos
@@ -57,6 +59,13 @@ fn cli_records_student_template_drawings() -> Result<(), Box<dyn Error>> {
     fs::remove_file(path)?;
     assert!(count > 2000);
     assert!(plate_debug_seen, "plate drawings were not recorded");
-    assert_eq!(hits, 0, "unimplemented template must hold fire");
+    assert!(
+        impact_marker_seen,
+        "controller's opted-in impact marker was not recorded"
+    );
+    assert!(
+        hits > 0,
+        "completed controller must hit the default moving target"
+    );
     Ok(())
 }

@@ -281,25 +281,32 @@ fn tilted_hit_test_uses_plate_up_instead_of_world_height() -> Result<(), Box<dyn
 }
 
 #[test]
-fn student_template_draws_observed_plates_without_firing() -> Result<(), Box<dyn Error>> {
+fn controller_waits_for_observations_then_draws_and_fires() -> Result<(), Box<dyn Error>> {
     let mut simulation = Simulation::new(Config::default())?;
+    let mut shots = 0;
     for _ in 0..100 {
         let frame = simulation.step(&mut aiming_sim::aim);
-        assert!(frame.command.is_none());
-        assert_eq!(frame.stats.shots, 0);
-        assert!(
-            frame
-                .gizmos
-                .overlays
-                .contains(&("Hit rate".to_owned(), "0/0".to_owned()))
-        );
+        let stats = frame.input.stats;
+        assert!(frame.gizmos.overlays.contains(&(
+            "Hit rate".to_owned(),
+            format!("{}/{}", stats.hits, stats.hits + stats.misses)
+        )));
         if frame.input.observation.is_some() {
+            assert!(frame.command.is_some());
             assert!(!frame.gizmos.lines.is_empty());
+            assert!(
+                frame
+                    .gizmos
+                    .points
+                    .iter()
+                    .any(|point| point.label == "Impact")
+            );
+        } else {
+            assert!(frame.command.is_none());
+            assert_eq!(frame.stats.shots, 0);
         }
-        assert!(
-            frame.gizmos.points.is_empty(),
-            "plate drawings must not add labels"
-        );
+        shots = frame.stats.shots;
     }
+    assert!(shots > 0);
     Ok(())
 }

@@ -30,23 +30,187 @@ use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 use ui::{Color, Gizmos};
 
-/// Implement latency compensation, plate selection, and future-position aiming.
+/// Predict one plate at impact, then aim and gate firing on relative incidence.
 pub fn aim(input: &Input, debug: &mut Gizmos) -> Option<Command> {
-    let resolved = input.stats.hits + input.stats.misses;
+    let resolved = input.stats.hits.saturating_add(input.stats.misses);
     debug.overlay("Hit rate", format!("{}/{resolved}", input.stats.hits));
 
-    let observation = input.observation?;
+    let Some(observation) = input.observation else {
+        debug.overlay("Status", "Waiting for observation");
+        return None;
+    };
+    let age_s = input.now_s - observation.time_s;
+    if !valid_observation(input, observation) {
+        debug.overlay("Status", "Invalid observation or geometry");
+        return None;
+    }
     for plate in observation.target.plates(input.size) {
         debug.plate(plate, input.size, Color::Cyan);
     }
 
-    // 1. Find the observation age and account for launch latency.
-    // 2. Select an armor plate before solving its trajectory.
-    // 3. Solve a trajectory with Trajectory::solve.
-    // 4. Aim at the future plate position using age, launch delay, and flight time.
-    // Optional drawings for your solution:
-    // debug.plate(predicted_plate, input.size, Color::Green);
-    // debug.trajectory(trajectory, Color::Orange);
+    let Some(solution) = intercept(observation.target, input.size, age_s) else {
+        debug.overlay("Status", "No reachable, converged intercept");
+        return None;
+    };
+    let fire = solution.incidence_cos >= MIN_INCIDENCE_COS;
+    let trajectory = solution.trajectory;
+    let impact = trajectory.position(trajectory.flight_time_s);
+    debug.plate(solution.plate, input.size, Color::Green);
+    debug.trajectory(trajectory, Color::Orange);
+    debug.point("Predicted center", solution.plate.center_m, Color::Green);
+    debug.point("Impact", impact, Color::Orange);
+    debug.line(solution.plate.center_m, impact, Color::Purple);
+    debug.overlay("Status", if fire { "Fire" } else { "Track: oblique entry" });
+    debug.overlay("Plate", solution.slot);
+    debug.overlay("Observation age", format!("{:.1} ms", age_s * 1000.0));
+    debug.overlay(
+        "Flight",
+        format!("{:.1} ms", trajectory.flight_time_s * 1000.0),
+    );
+    // Absolute impact time starts at now; the observation age must not be added twice.
+    debug.overlay(
+        "Impact time",
+        format!(
+            "{:.4} s",
+            input.now_s + physics::LAUNCH_DELAY_S + trajectory.flight_time_s
+        ),
+    );
+    debug.overlay("Incidence cosine", format!("{:.4}", solution.incidence_cos));
+    debug.overlay("Iterations", solution.iterations);
+    debug.overlay(
+        "Endpoint residual",
+        format!("{:.6} mm", solution.residual_m * 1000.0),
+    );
+    Some(Command {
+        yaw_rad: trajectory.yaw_rad,
+        pitch_rad: trajectory.pitch_rad,
+        fire,
+    })
+}
+
+/// Require entry within 60 degrees of the full 3D outward normal.
+const MIN_INCIDENCE_COS: f64 = 0.5;
+const INTERCEPT_TIME_TOLERANCE_S: f64 = 1e-7;
+const MAX_INTERCEPT_ITERATIONS: usize = 48;
+const MAX_ENDPOINT_RESIDUAL_M: f64 = 1e-4;
+
+#[derive(Clone, Copy, Debug)]
+struct Intercept {
+    slot: usize,
+    plate: Plate,
+    trajectory: Trajectory,
+    incidence_cos: f64,
+    iterations: usize,
+    residual_m: f64,
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a.into_iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn difference(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|axis| a[axis] - b[axis])
+}
+
+fn length(vector: [f64; 3]) -> f64 {
+    vector[0].hypot(vector[1]).hypot(vector[2])
+}
+
+fn valid_observation(input: &Input, observation: Sample) -> bool {
+    let target = observation.target;
+    let size = input.size;
+    [
+        input.now_s,
+        observation.time_s,
+        target.x_m,
+        target.y_m,
+        target.theta_rad,
+        target.vx_m_s,
+        target.vy_m_s,
+        target.omega_rad_s,
+        size.mount_pitch_rad,
+        size.radius_m,
+        size.plate_width_m,
+        size.plate_height_m,
+        size.plate_center_z_m,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        && observation.time_s >= 0.0
+        && input.now_s >= observation.time_s
+        && size.radius_m > 0.0
+        && size.plate_width_m > 0.0
+        && size.plate_height_m > 0.0
+        && size.plate_center_z_m > 0.0
+}
+
+fn intercept(target: Target, size: Size, age_s: f64) -> Option<Intercept> {
+    let delay_s = age_s + physics::LAUNCH_DELAY_S;
+    let at_launch = target.at(delay_s);
+    let center = [at_launch.x_m, at_launch.y_m, size.plate_center_z_m];
+    let mut flight_s = length(difference(center, physics::MUZZLE_M)) / physics::MUZZLE_SPEED_M_S;
+    if !flight_s.is_finite() || flight_s <= 0.0 {
+        return None;
+    }
+
+    // Select once using a cheap arrival estimate; never solve all four trajectories
+    // or change plate identity inside the fixed-point iteration.
+    let mut selected = None;
+    let mut best_facing = 0.0;
+    for (slot, plate) in target
+        .at(delay_s + flight_s)
+        .plates(size)
+        .into_iter()
+        .enumerate()
+    {
+        let to_muzzle = difference(physics::MUZZLE_M, plate.center_m);
+        let distance = length(to_muzzle);
+        if distance > 0.0 {
+            let facing = dot(plate.outward_normal, to_muzzle) / distance;
+            if facing > best_facing {
+                best_facing = facing;
+                selected = Some(slot);
+            }
+        }
+    }
+    let slot = selected?;
+    for iterations in 1..=MAX_INTERCEPT_ITERATIONS {
+        let plate = target.at(delay_s + flight_s).plates(size)[slot];
+        let trajectory = Trajectory::solve(plate.center_m)?;
+        let next_flight_s = trajectory.flight_time_s;
+        if (next_flight_s - flight_s).abs() <= INTERCEPT_TIME_TOLERANCE_S {
+            // Check consistency at the returned flight time, not the preceding guess.
+            let plate = target.at(delay_s + next_flight_s).plates(size)[slot];
+            let residual_m = length(difference(
+                trajectory.position(next_flight_s),
+                plate.center_m,
+            ));
+            let relative_velocity =
+                difference(trajectory.velocity(next_flight_s), plate.velocity_m_s);
+            let relative_speed = length(relative_velocity);
+            if !residual_m.is_finite()
+                || residual_m > MAX_ENDPOINT_RESIDUAL_M
+                || !relative_speed.is_finite()
+                || relative_speed <= 0.0
+            {
+                return None;
+            }
+            let incidence_cos = -dot(plate.outward_normal, relative_velocity) / relative_speed;
+            if !incidence_cos.is_finite() {
+                return None;
+            }
+            return Some(Intercept {
+                slot,
+                plate,
+                trajectory,
+                incidence_cos,
+                iterations,
+                residual_m,
+            });
+        }
+        // Relaxation damps oscillation for fast spin while preserving the fixed point.
+        flight_s = 0.5 * (flight_s + next_flight_s);
+    }
     None
 }
 
